@@ -68,9 +68,9 @@ def sample(name):
     # need to remove before babel transpilation
     native.genrule(
         name = "compiled_no_region_tags",
-        srcs = [":compiled.js"],
+        srcs = [":index.js"],
         outs = ["compiled_no_region_tags.js"],
-        cmd = "cat $(RULEDIR)/compiled.js > $@; " +
+        cmd = "cat $(RULEDIR)/index.js > $@; " +
               "$(location //rules:strip_region_tags_bin) $@; ",
         tools = ["//rules:strip_region_tags_bin"],
         visibility = ["//visibility:public"],
