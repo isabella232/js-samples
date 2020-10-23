@@ -4,12 +4,17 @@ load("//rules:prettier.bzl", "prettier")
 load("//rules:tags.bzl", "tags_test")
 load("//rules:js_test.bzl", "js_test")
 load("//rules:template.bzl", "template_file")
-load("@npm//@bazel/typescript:index.bzl", "ts_library")
+load("@npm//@bazel/typescript:index.bzl", "ts_devserver", "ts_library")
 load("@rules_pkg//:pkg.bzl", "pkg_tar")
 load("@npm//@babel/cli:index.bzl", "babel")
+load("@npm//http-server:index.bzl", "http_server")
 
 def sample(name):
-    """ generates the various outputs"""
+    """ Generates sample outputs
+
+    Args:
+      name: sample directory name
+    """
     ts_library(
         name = "_compile",
         srcs = ["src/index.ts"],
@@ -27,17 +32,32 @@ def sample(name):
     )
 
     native.genrule(
-        name = "app_js",
+        name = "compiled_js",
         srcs = [":_compile_outputs", "//:.eslintrc.json"],
-        outs = ["index.js"],
+        outs = ["compiled.js"],
         cmd = "cat $(RULEDIR)/src/index.mjs > $@; " +
-              "$(location //rules:remove_apache_license) $@; " +
-              "$(location //rules:strip_source_map_url_bin) $@; " +
-              "sed -i'.bak' '/.*PRESERVE_COMMENT_ABOVE.*/d' $@; " + # it isn't possible to have tsc preserve some comments
+              "sed -i'.bak' '/.*PRESERVE_COMMENT_ABOVE.*/d' $@; " +  # it isn't possible to have tsc preserve some comments
               "sed -i'.bak' 's/export const/const/g' $@; " +
               "sed -i'.bak' 's/export {.*};//g' $@; " +
               "sed -i'.bak' '/^\\s*\\/\\/ @ts-.*/d' $@; " +
-              "sed -i'.bak' 's/\\/\\/ @ts-.*//g' $@; " +
+              "sed -i'.bak' 's/\\/\\/ @ts-.*//g' $@; ",
+    )
+
+    native.genrule(
+        name = "dev_js",
+        srcs = [":compiled.js"],
+        outs = ["dev.js"],
+        cmd = "cat $(location compiled.js) > $@; " +
+              "sed -i'.bak' \"s/YOUR_API_KEY/$${GOOGLE_MAPS_JS_SAMPLES_KEY}/g\" $@; ",
+    )
+
+    native.genrule(
+        name = "app_js",
+        srcs = [":compiled.js", "//:.eslintrc.json"],
+        outs = ["index.js"],
+        cmd = "cat $(location :compiled.js) > $@; " +
+              "$(location //rules:remove_apache_license) $@; " +
+              "$(location //rules:strip_source_map_url_bin) $@; " +
               "$(location //rules:prettier) --write $@; " +
               "$(location //rules:eslint) -c $(location //:.eslintrc.json) --fix $@; ",
         tools = ["//rules:eslint", "//rules:remove_apache_license", "//rules:strip_source_map_url_bin", "//rules:strip_region_tags_bin", "//rules:prettier"],
@@ -47,13 +67,12 @@ def sample(name):
     # babel moves trailing region tags after the last non comment line
     # need to remove before babel transpilation
     native.genrule(
-        name = "index_no_region_tags",
-        srcs = [":index.js"],
-        outs = ["index_no_region_tags.js"],
-        cmd = "cat $(RULEDIR)/index.js > $@; " +
-              "$(location //rules:strip_region_tags_bin) $@; " +
-              "$(location //rules:prettier) --write $@; ",
-        tools = ["//rules:strip_region_tags_bin", "//rules:prettier"],
+        name = "compiled_no_region_tags",
+        srcs = [":compiled.js"],
+        outs = ["compiled_no_region_tags.js"],
+        cmd = "cat $(RULEDIR)/compiled.js > $@; " +
+              "$(location //rules:strip_region_tags_bin) $@; ",
+        tools = ["//rules:strip_region_tags_bin"],
         visibility = ["//visibility:public"],
     )
 
@@ -63,13 +82,13 @@ def sample(name):
             "iframe.js",
         ],
         args = [
-            "$(execpath :index_no_region_tags.js)",
+            "$(execpath :compiled_no_region_tags.js)",
             "--config-file $(location //:.babelrc)",
             "--out-file",
             "$(execpath :iframe.js)",
         ],
         data = [
-            "index_no_region_tags.js",
+            "compiled_no_region_tags.js",
             "//:.babelrc",
             "@npm//@babel/preset-env",
         ],
@@ -229,9 +248,8 @@ def sample(name):
         cmd = "$(location //rules:strip_region_tags_bin) $(location :iframe.js); " +
               "$(location //rules:strip_region_tags_bin) $(location :style.css); " +
               "$(location //rules:inline) $(location :_iframe.html) $@; " +
-              "sed -i'.bak' \"s/YOUR_API_KEY/$${GOOGLE_MAPS_JS_SAMPLES_KEY}/g\" $@; " +
-              "$(location //rules:prettier) --write $@; ",
-        tools = ["//rules:inline", "//rules:prettier", "//rules:strip_region_tags_bin"],
+              "sed -i'.bak' \"s/YOUR_API_KEY/$${GOOGLE_MAPS_JS_SAMPLES_KEY}/g\" $@; ",
+        tools = ["//rules:inline", "//rules:strip_region_tags_bin"],
         visibility = ["//visibility:public"],
     )
 
@@ -259,7 +277,7 @@ def sample(name):
         cmd = "cat $(location :src/index.ts) > $@; " +
               "$(location //rules:strip_region_tags_bin) $@; " +
               "echo '\nimport \"./style.css\"; // required for webpack' >> $@; " +
-              "sed -i'.bak' '/.*PRESERVE_COMMENT_ABOVE.*/d' $@; " + # it isn't possible to have tsc preserve some comments
+              "sed -i'.bak' '/.*PRESERVE_COMMENT_ABOVE.*/d' $@; " +  # it isn't possible to have tsc preserve some comments
               "$(location //rules:prettier) --write $@; ",
         tools = ["//rules:prettier", "//rules:strip_region_tags_bin"],
     )
@@ -346,10 +364,10 @@ def sample(name):
     tags_test(name = "test_tags_ts", file = ":src/index.ts")
     tags_test(name = "test_tags_css", file = ":style.css")
     tags_test(name = "test_tags_html", file = ":sample.html")
-    
+
     js_test(name = "test_index_js", file = ":index.js")
     js_test(name = "test_package_ts", file = ":_package.ts")
-    
+
     native.genrule(
         name = "package_test",
         srcs = [":{}-package.tgz".format(name)],
@@ -358,4 +376,22 @@ def sample(name):
         local = 1,
         tags = ["manual", "package"],
         outs = ["index.webpack.js"],
+    )
+
+    http_server(
+        name = "serve",
+        args = [
+            "samples/{}".format(name),
+        ],
+        data = [
+            ":index.html",
+        ],
+    )
+
+    ts_devserver(
+        name = "devserver",
+        deps = [":dev.js"],
+        serving_path = "/app.js",
+        static_files = [":index.html"],
+        port = 8080,
     )
